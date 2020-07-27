@@ -1,0 +1,165 @@
+clc;clear all;close all;
+%%
+%Add decidion part of thje program, needs to load from csv and from data structure
+%%  Allocation for csv import
+
+tic
+opts = delimitedTextImportOptions("NumVariables", 10);
+
+%% Specify range and delimiter
+
+opts.DataLines = [5, Inf];
+opts.Delimiter = ",";
+
+%% Specify column names and types
+
+opts.VariableNames = ["Notes", "Time", "Sequence", "Block", "Cycle","CMDffs", "Positionmm", "LoadkN", "Strain1uzduznimm", "Strain2poprecniVolts"];
+opts.VariableTypes = ["string", "double", "double", "double", "string", "double", "double", "double", "double", "double"];
+opts = setvaropts(opts, [1, 5], "WhitespaceRule", "preserve");
+opts = setvaropts(opts, [1, 5], "EmptyFieldRule", "auto");
+opts.ExtraColumnsRule = "ignore";
+opts.EmptyLineRule = "read";
+
+%% Import the data
+Data = readtable('C:\Users\Alen\Desktop\Diplomski Rad\Tensile_test_data\Data without specimen dimensions\Al7075_vlacni\Al7075_tensile_0_01mms_#3', opts);
+clear opts
+TIme_for_import=toc;
+%% From Data matrix to vectors
+
+tic
+
+F= Data{:,'LoadkN'};
+
+dl=Data{:,'Positionmm'};
+
+T=Data{:,'Time'};
+
+%% Extensometer test
+    %% Strain1uzduznimm
+    
+    vector=Data{:,'Strain1uzduznimm'};
+    disp(' ');
+    disp('Evaluation of vector: Strain1uzduznimm');
+    disp(' ');
+    [value] = Extensometer_on_test(vector);
+    if value ==1
+        dl=Data{:,'Positionmm'};
+    else
+        clear ex1
+    end
+    clear vector
+    disp(' ');
+    
+    %% Strain2poprecni
+    
+    vector=Data{:,'Strain2poprecniVolts'};
+    disp('Evaluation of vector: Strain2poprecniVolts');
+    disp(' ');
+    [value] = Extensometer_on_test(vector);
+    if value ==1
+        ex2=Data{:,'Strain2poprecniVolts'};
+    else
+        clear ex2
+    end
+    clear vector
+    disp(' ');
+
+Time_for_Data_import_ekst=toc;
+
+%% Data preprocessing
+
+tic
+[F,dl,n3,fs,fn] = Data_preprocessing_v1(F,T,dl);
+Time_for_Data_Preprocessing=toc;
+clear T
+
+%% Data normalization
+
+tic
+[normalization_data,dl,F]=data_normalization(dl,F);
+Time_for_normalization=toc;
+
+%% Filter Heuristic
+
+tic
+[n2idxFH] = Filter_heuristic_v1(F,dl,fs);
+Time_for_Heuristic=toc;
+
+%% Finding good moving avg filter
+
+tic
+[F_filter_ma,dl_filter_ma,rmse_ma_filter]=MA_opt_filt(dl,F);
+timeForSGOlayfilter=toc;
+
+%% Finding good Savitzky Golay filter length
+
+tic
+[F_filter_sg,dl_filter_sg,rmse_sg_filter]=SG_opt_filt(dl,F);
+timeForSGOlayfilter=toc;
+
+%% Smooth Spline fitting
+tic
+[n2idxSSF_ma,n2_meand1_ma] = Smooth_Spline_fit_v2(F_filter_ma,dl_filter_ma);
+[n2idxSSF_sg,n2_meand1_sg] = Smooth_Spline_fit_v2(F_filter_sg,dl_filter_sg);
+Time_for_Smooth_Splinefit=toc;
+
+%% Rewriting n2 points into vectors - potential candidate vector
+tic
+lenF=length(F);
+[n2_theo_points]=n2_points_filter(n2idxSSF_ma,n2_meand1_ma,n2idxSSF_sg,n2_meand1_sg,n2idxFH,lenF);
+clear lenF n2idxSSF n2_meand1 n2idxFH
+Time_for_n2_points_filter=toc;
+%% Potential candidate vector
+
+plots(dl,F,n2_theo_points);
+
+%% Inverse of data normalization
+tic
+[dl,F]=inverse_of_data_normalization(dl,F,normalization_data);
+clear normalization_data
+Time_for_INV_normalization=toc;
+figure
+plot(dl,F)
+hold on
+for i=1:length(n2_theo_points)
+    plot(dl(n2_theo_points(i)),F(n2_theo_points(i)),'o');
+    hold on
+end
+legend('Raw Data','Potential candidate 1','Potential candidate 2','Potential candidate 3','Potential candidate 4','Potential candidate 5')
+xlabel('Position mm')
+ylabel('Load kN')
+hold off
+
+%% Transform from F(kN) to Stress(MPa), from dl(mm) to Strain(%)
+tic
+[Stress,Strain]=material_testing_dimensions_input(F,dl);
+Time_for_Material_Testing_Dimenstions=toc;
+figure
+%%
+plot(Strain,Stress)
+hold on
+for i=1:length(n2_theo_points)
+    plot(Strain(n2_theo_points(i)),Stress(n2_theo_points(i)),'o');
+    hold on
+end
+legend('Raw Data','Potential candidate 1','Potential candidate 2','Potential candidate 3','Potential candidate 4','Potential candidate 5')
+xlabel('Strain %')
+ylabel('Stress MPa')
+xlim([0 max(Strain)])
+ylim([0 max(Stress)])
+grid on
+hold off
+%% Optimal line fitting
+tic
+[opt_rp_line,slope]=Optimal_line_fit_v2_AG(Stress,Strain,n2_theo_points);%Optimal_line_fit_v2_AG(F,dl,n2_theo_points)
+Time_for_Optimal_Line=toc;
+
+%% Prof stress line
+
+tic
+[proof_line]=Proof_stress_line(slope,opt_rp_line);
+Time_for_Proof_Line=toc;
+
+%% Proof stress line plot
+
+Proof_stress_line_plots(proof_line,Strain,Stress,opt_rp_line);%(proof_line,dl,F,opt_rp_line)
